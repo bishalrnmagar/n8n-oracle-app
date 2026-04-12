@@ -1,0 +1,94 @@
+#cloud-config
+
+timezone: Asia/Kathmandu
+
+package_update: true
+package_upgrade: true
+
+packages:
+  - apt-transport-https
+  - ca-certificates
+  - curl
+  - gnupg
+  - lsb-release
+
+runcmd:
+  # Install Docker
+  - curl -fsSL https://get.docker.com | sh
+  - systemctl enable docker
+  - systemctl start docker
+
+  # Install Docker Compose plugin
+  - mkdir -p /usr/local/lib/docker/cli-plugins
+  - curl -fsSL "https://github.com/docker/compose/releases/latest/download/docker-compose-linux-$(uname -m)" -o /usr/local/lib/docker/cli-plugins/docker-compose
+  - chmod +x /usr/local/lib/docker/cli-plugins/docker-compose
+
+  # Open iptables ports (OCI Ubuntu images block traffic by default)
+  - iptables -I INPUT 6 -m state --state NEW -p tcp --dport 80 -j ACCEPT
+  - iptables -I INPUT 6 -m state --state NEW -p tcp --dport 443 -j ACCEPT
+  - iptables -I INPUT 6 -m state --state NEW -p tcp --dport 5678 -j ACCEPT
+  - netfilter-persistent save
+
+  # Set up DuckDNS cron (update IP every 5 min)
+  - mkdir -p /opt/duckdns
+  - |
+    cat > /opt/duckdns/update.sh << 'DUCKEOF'
+    #!/bin/bash
+    echo url="https://www.duckdns.org/update?domains=${duckdns_subdomain}&token=${duckdns_token}&ip=" | curl -k -o /opt/duckdns/duck.log -K -
+    DUCKEOF
+  - chmod +x /opt/duckdns/update.sh
+  - /opt/duckdns/update.sh
+  - echo "*/5 * * * * root /opt/duckdns/update.sh" > /etc/cron.d/duckdns
+
+  # Create app directory
+  - mkdir -p /opt/finance-bot
+
+  # Write docker-compose.yml
+  - |
+    cat > /opt/finance-bot/docker-compose.yml << 'COMPEOF'
+    services:
+      n8n:
+        image: n8nio/n8n:latest
+        restart: unless-stopped
+        ports:
+          - "5678:5678"
+        environment:
+          - N8N_HOST=${duckdns_subdomain}.duckdns.org
+          - N8N_PORT=5678
+          - N8N_PROTOCOL=https
+          - WEBHOOK_URL=https://${duckdns_subdomain}.duckdns.org/
+          - GENERIC_TIMEZONE=Asia/Kathmandu
+          - TZ=Asia/Kathmandu
+          - N8N_BASIC_AUTH_ACTIVE=true
+          - N8N_BASIC_AUTH_USER=${n8n_basic_auth_user}
+          - N8N_BASIC_AUTH_PASSWORD=${n8n_basic_auth_password}
+        volumes:
+          - n8n_data:/home/node/.n8n
+
+      caddy:
+        image: caddy:2-alpine
+        restart: unless-stopped
+        ports:
+          - "80:80"
+          - "443:443"
+        volumes:
+          - ./Caddyfile:/etc/caddy/Caddyfile:ro
+          - caddy_data:/data
+          - caddy_config:/config
+
+    volumes:
+      n8n_data:
+      caddy_data:
+      caddy_config:
+    COMPEOF
+
+  # Write Caddyfile
+  - |
+    cat > /opt/finance-bot/Caddyfile << 'CADDYEOF'
+    ${duckdns_subdomain}.duckdns.org {
+        reverse_proxy n8n:5678
+    }
+    CADDYEOF
+
+  # Start services
+  - cd /opt/finance-bot && docker compose up -d

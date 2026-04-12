@@ -1,0 +1,21 @@
+# OCI Authentication
+tenancy_ocid     = "ocid1.tenancy.oc1..aaaaaaaaXXXXXXXX"
+user_ocid        = "ocid1.user.oc1..aaaaaaaaXXXXXXXX"
+fingerprint      = "aa:bb:cc:dd:ee:ff:00:11:22:33:44:55:66:77:88:99"
+private_key_path = "~/.oci/oci_api_key.pem"
+region           = "ap-mumbai-1"
+compartment_ocid = "ocid1.compartment.oc1..aaaaaaaaXXXXXXXX"
+
+# VM Access
+ssh_public_key = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAXXXXXXXXXX you@machine"
+
+# DuckDNS
+duckdns_subdomain = "your-subdomain"
+duckdns_token     = "your-duckdns-token"
+
+# Telegram
+telegram_bot_token = "123456789:ABCdefGHIjklMNOpqrsTUVwxyz"
+
+# n8n Auth
+n8n_basic_auth_user     = "admin"
+n8n_basic_auth_password = "change-me-to-a-strong-password"
