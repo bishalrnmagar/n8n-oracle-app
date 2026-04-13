@@ -1,0 +1,102 @@
+{
+  "name": "AI Finance Manager",
+  "nodes": [
+    {
+      "parameters": {
+        "updates": [
+          "message"
+        ],
+        "additionalFields": {}
+      },
+      "type": "n8n-nodes-base.telegramTrigger",
+      "typeVersion": 1.2,
+      "position": [
+        0,
+        0
+      ],
+      "id": "58489504-fd67-4e17-aa91-207c58653401",
+      "name": "Telegram Trigger",
+      "webhookId": "35cd290e-7a77-4dd1-8112-104a04334e32",
+      "credentials": {
+        "telegramApi": {
+          "id": "XrG30rzkLtAuqJQd",
+          "name": "Telegram account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "const msg = $input.first().json.message.text || '';\nconst chatId = $input.first().json.message.chat.id;\nconst firstName = $input.first().json.message.from.first_name || '';\nconst raw = msg.trim();\n\n// Extract all numbers from the message\nconst numbers = raw.match(/\\d+(?:\\.\\d{1,2})?/g);\n\nif (!numbers || numbers.length === 0) {\n  return [{\n    json: {\n      chatId,\n      reply: '❌ No amounts found in your message.\\n\\nSend something like:\\n• 120 food\\n• spent 500 on petrol\\n• 40 chai'\n    }\n  }];\n}\n\nconst amounts = numbers.map(n => parseFloat(n));\nconst total = amounts.reduce((sum, a) => sum + a, 0);\n\n// Extract tags\nconst tags = [];\nconst tagRegex = /#(\\w+)/g;\nlet tagMatch;\nwhile ((tagMatch = tagRegex.exec(raw)) !== null) {\n  tags.push('#' + tagMatch[1]);\n}\n\n// Remove numbers and tags to get the text part\nconst textPart = raw\n  .replace(/\\d+(?:\\.\\d{1,2})?/g, '')\n  .replace(/#\\w+/g, '')\n  .replace(/\\b(spent|on|for|rs|npr|rupees|rp|paid)\\b/gi, '')\n  .replace(/\\s+/g, ' ')\n  .trim();\n\n// Category keyword mapping\nconst categories = {\n  'Food': ['food', 'lunch', 'dinner', 'breakfast', 'snack', 'meal', 'restaurant', 'cafe', 'chai', 'tea', 'coffee', 'momo', 'dal bhat', 'tiffin', 'canteen', 'dal', 'bhat'],\n  'Transport': ['petrol', 'diesel', 'fuel', 'uber', 'taxi', 'bus', 'bike', 'ride', 'fare', 'auto', 'grab', 'ola', 'pathao'],\n  'Groceries': ['groceries', 'grocery', 'vegetables', 'fruits', 'supermarket', 'bhatbhateni', 'bigmart', 'dairy', 'milk', 'eggs'],\n  'Rent': ['rent', 'house rent', 'room rent', 'flat'],\n  'Utilities': ['electricity', 'water', 'internet', 'wifi', 'phone', 'mobile', 'recharge', 'bill', 'nea', 'ntc', 'ncell'],\n  'Entertainment': ['movie', 'netflix', 'spotify', 'game', 'party', 'outing', 'drinks', 'beer'],\n  'Health': ['medicine', 'doctor', 'hospital', 'pharmacy', 'gym', 'medical', 'health', 'dental'],\n  'Shopping': ['clothes', 'shoes', 'electronics', 'amazon', 'daraz', 'gadget', 'laptop'],\n  'Subscriptions': ['subscription', 'premium', 'membership', 'annual', 'monthly plan'],\n  'Education': ['books', 'course', 'tuition', 'class', 'training', 'udemy', 'coursera']\n};\n\nlet matchedCategory = 'Misc';\nlet matchedKeyword = '';\nconst lowerText = textPart.toLowerCase();\n\nfor (const [cat, keywords] of Object.entries(categories)) {\n  for (const kw of keywords) {\n    if (lowerText.includes(kw) && kw.length > matchedKeyword.length) {\n      matchedCategory = cat;\n      matchedKeyword = kw;\n    }\n  }\n}\n\n// Build note (remaining text after removing matched keyword)\nlet note = textPart;\nif (matchedKeyword) {\n  const kwIndex = lowerText.indexOf(matchedKeyword);\n  note = (textPart.substring(0, kwIndex) + textPart.substring(kwIndex + matchedKeyword.length)).replace(/\\s+/g, ' ').trim();\n}\n\n// Build reply\nlet reply = '📋 Message Breakdown\\n';\nreply += '━━━━━━━━━━━━━━━\\n';\nreply += '📨 Original: ' + raw + '\\n\\n';\nreply += '💰 Amount(s): ' + amounts.map(a => 'NPR ' + a.toLocaleString()).join(', ') + '\\n';\nreply += '📁 Category: ' + matchedCategory + '\\n';\nif (note) reply += '📝 Note: ' + note + '\\n';\nif (tags.length > 0) reply += '🏷️ Tags: ' + tags.join(', ') + '\\n';\nreply += '👤 From: ' + firstName + '\\n';\nreply += '━━━━━━━━━━━━━━━\\n';\nreply += '💵 Total: NPR ' + total.toLocaleString();\n\nreturn [{ json: { chatId, reply } }];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        220,
+        0
+      ],
+      "id": "a1b2c3d4-0001-4000-8000-000000000001",
+      "name": "Parse Message"
+    },
+    {
+      "parameters": {
+        "chatId": "={{ $json.chatId }}",
+        "text": "={{ $json.reply }}",
+        "additionalFields": {}
+      },
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1.2,
+      "position": [
+        440,
+        0
+      ],
+      "id": "a1b2c3d4-0002-4000-8000-000000000002",
+      "name": "Send Reply",
+      "credentials": {
+        "telegramApi": {
+          "id": "XrG30rzkLtAuqJQd",
+          "name": "Telegram account"
+        }
+      }
+    }
+  ],
+  "pinData": {},
+  "connections": {
+    "Telegram Trigger": {
+      "main": [
+        [
+          {
+            "node": "Parse Message",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Parse Message": {
+      "main": [
+        [
+          {
+            "node": "Send Reply",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": true,
+  "settings": {
+    "executionOrder": "v1",
+    "binaryMode": "separate",
+    "timeSavedMode": "fixed",
+    "callerPolicy": "workflowsFromSameOwner",
+    "availableInMCP": false
+  },
+  "versionId": "54325c20-a440-4411-b8a5-dc2795cfa429",
+  "meta": {
+    "templateCredsSetupCompleted": true,
+    "instanceId": "991033685f241fa04bc5fc2324413f703f4f944ffad1c31ab9f08f4ad1a9f359"
+  },
+  "id": "ZQUNUYGYjTe5WoWi",
+  "tags": []
+}
