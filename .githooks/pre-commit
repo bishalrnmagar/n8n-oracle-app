@@ -1,0 +1,37 @@
+#!/bin/bash
+# Pre-commit hook: block commits containing secrets
+
+FAIL=0
+
+# Check for sensitive files being staged
+for pattern in "*.tfstate" "terraform.tfvars" ".env" "*.pem" "*.key"; do
+  FOUND=$(git diff --cached --name-only | grep -E "$pattern$")
+  if [ -n "$FOUND" ]; then
+    echo "❌ BLOCKED: Sensitive file staged: $FOUND"
+    FAIL=1
+  fi
+done
+
+# Check staged content for secret patterns
+STAGED_DIFF=$(git diff --cached --diff-filter=d)
+
+PATTERNS=(
+  'sk-ant-[a-zA-Z0-9_-]+'           # Anthropic API key
+  '[0-9]+:AA[A-Za-z0-9_-]{30,}'     # Telegram bot token
+  'ocid1\.[a-z]+\.oc1\.\.'          # OCI resource ID
+  'duckdns_token\s*=\s*"[^"]*[a-f0-9-]{36}"'  # DuckDNS token
+  'POSTGRES_PASSWORD=[^$]'          # Hardcoded DB password
+)
+
+for pat in "${PATTERNS[@]}"; do
+  if echo "$STAGED_DIFF" | grep -qP "$pat"; then
+    echo "❌ BLOCKED: Secret pattern detected: $pat"
+    FAIL=1
+  fi
+done
+
+if [ "$FAIL" -eq 1 ]; then
+  echo ""
+  echo "Remove secrets and try again. Use .gitignore or environment variables."
+  exit 1
+fi
