@@ -20,7 +20,7 @@ PATTERNS=(
   '[0-9]+:AA[A-Za-z0-9_-]{30,}'     # Telegram bot token
   'ocid1\.[a-z]+\.oc1\.\.'          # OCI resource ID
   'duckdns_token\s*=\s*"[^"]*[a-f0-9-]{36}"'  # DuckDNS token
-  'POSTGRES_PASSWORD=[^$]'          # Hardcoded DB password
+  'POSTGRES_PASSWORD=[a-zA-Z0-9!@#%^&*]'      # Hardcoded DB password (not variable refs like ${...})
 )
 
 for pat in "${PATTERNS[@]}"; do
