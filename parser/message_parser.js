@@ -1,170 +1,274 @@
 /**
  * Finance Bot Message Parser
- * Extracts intent, amount, category, note, and tags from Telegram messages.
- * Paste this into an n8n Code node after the Telegram Trigger node.
+ * Extracts intent, amount, category, note, tags, and date offset from Telegram messages.
+ *
+ * n8n usage:  Paste the parseMessage() body into a Code node.
+ * Standalone: Run `node message_parser.js` to execute the test suite at the bottom.
  */
 
-const raw = $input.first().json.message.text || '';
-const msg = raw.trim();
-const msgLower = msg.toLowerCase();
-
 const CATEGORY_KEYWORDS = {
-  Food: ['food', 'lunch', 'dinner', 'breakfast', 'snack', 'meal', 'restaurant', 'cafe', 'chai', 'tea', 'coffee', 'momo', 'tiffin', 'canteen'],
-  Transport: ['petrol', 'diesel', 'fuel', 'uber', 'taxi', 'bus', 'bike', 'ride', 'fare', 'auto', 'pathao'],
+  Food: ['food', 'lunch', 'dinner', 'breakfast', 'snack', 'meal', 'restaurant', 'cafe', 'chai', 'tea', 'coffee', 'momo', 'dal bhat', 'tiffin', 'canteen'],
+  Transport: ['petrol', 'diesel', 'fuel', 'uber', 'taxi', 'bus', 'bike', 'ride', 'fare', 'auto', 'grab', 'ola', 'pathao'],
   Groceries: ['groceries', 'grocery', 'vegetables', 'fruits', 'supermarket', 'bhatbhateni', 'bigmart', 'dairy', 'milk', 'eggs'],
-  Rent: ['rent'],
+  Rent: ['rent', 'house rent', 'room rent', 'flat'],
   Utilities: ['electricity', 'water', 'internet', 'wifi', 'phone', 'mobile', 'recharge', 'bill', 'nea', 'ntc', 'ncell'],
   Entertainment: ['movie', 'netflix', 'spotify', 'game', 'party', 'outing', 'drinks', 'beer'],
-  Health: ['medicine', 'doctor', 'hospital', 'pharmacy', 'gym', 'medical', 'dental'],
+  Health: ['medicine', 'doctor', 'hospital', 'pharmacy', 'gym', 'medical', 'health', 'dental'],
   Shopping: ['clothes', 'shoes', 'electronics', 'amazon', 'daraz', 'gadget', 'laptop'],
-  Subscriptions: ['subscription', 'premium', 'membership'],
-  Education: ['books', 'course', 'tuition', 'class', 'training', 'udemy', 'coursera']
+  Subscriptions: ['subscription', 'premium', 'membership', 'annual', 'monthly plan'],
+  Education: ['books', 'course', 'tuition', 'class', 'training', 'udemy', 'coursera'],
 };
 
-const STOP_WORDS = ['spent', 'on', 'for', 'rs', 'npr', 'to', 'at', 'with'];
+const STOP_WORDS = ['spent', 'on', 'for', 'rs', 'npr', 'rupees', 'rp', 'paid'];
+
+const ALL_CATEGORIES = ['food', 'transport', 'groceries', 'rent', 'utilities', 'entertainment', 'health', 'shopping', 'subscriptions', 'education', 'misc'];
 
 function matchCategory(text) {
-  const words = text.toLowerCase().split(/\s+/);
-  for (const word of words) {
-    for (const [cat, keywords] of Object.entries(CATEGORY_KEYWORDS)) {
-      if (keywords.includes(word)) return cat;
+  let matched = 'Misc';
+  let matchedKw = '';
+  const lower = text.toLowerCase();
+
+  for (const [cat, keywords] of Object.entries(CATEGORY_KEYWORDS)) {
+    for (const kw of keywords) {
+      if (lower.includes(kw) && kw.length > matchedKw.length) {
+        matched = cat;
+        matchedKw = kw;
+      }
     }
   }
-  return 'Misc';
+
+  return { category: matched, keyword: matchedKw };
 }
 
-function stripCategoryKeywords(text, category) {
-  const keywords = CATEGORY_KEYWORDS[category] || [];
-  return text.split(/\s+/).filter(w => !keywords.includes(w.toLowerCase())).join(' ').trim();
-}
+function parseMessage(raw) {
+  const text = (raw || '').trim();
+  const lower = text.toLowerCase();
 
-// ─── Help ────────────────────────────────────────────────────
-if (/^(\/start|\/help|help)$/i.test(msgLower)) {
-  return [{ json: { intent: 'help', raw_message: msg } }];
-}
+  // ---- Classify intent ----
+  let intent = 'unknown';
 
-// ─── Delete last ─────────────────────────────────────────────
-if (/\b(delete last|undo)\b/i.test(msgLower)) {
-  return [{ json: { intent: 'delete_last', raw_message: msg } }];
-}
-
-// ─── Edit last ───────────────────────────────────────────────
-if (/\b(edit last|change last|last was)\b/i.test(msgLower)) {
-  const result = { intent: 'edit_last', raw_message: msg };
-
-  const amountEdit = msgLower.match(/amount\s+to\s+(\d+)/);
-  if (amountEdit) {
-    result.edit_field = 'amount';
-    result.edit_value = amountEdit[1];
-    return [{ json: result }];
+  if (/^\/?(?:start|help)$/i.test(text)) {
+    intent = 'help';
+  } else if (/\b(delete\s*last|remove\s*last|undo|cancel\s*last)\b/i.test(text)) {
+    intent = 'delete_last';
+  } else if (/\b(edit\s*last|change\s*last|correct\s*last|last\s*was)\b/i.test(text)) {
+    intent = 'edit_last';
+  } else if (/\b(report|summary|how\s*much|total|spent\s*today)\b/i.test(text)) {
+    intent = 'report';
+  } else if (/\b(set\s+budget)\b/i.test(text)) {
+    intent = 'set_budget';
+  } else if (/\b(received|earned|salary|income)\b/i.test(text) && /\d/.test(text)) {
+    intent = 'log_income';
+  } else if (/\d/.test(text)) {
+    intent = 'log_expense';
   }
 
-  const catEdit = msgLower.match(/(?:was|to)\s+(\w+?)(?:\s+not\s+\w+)?$/);
-  if (catEdit) {
-    result.edit_field = 'category';
-    result.edit_value = matchCategory(catEdit[1]);
-    return [{ json: result }];
+  // ---- Detect date offset ----
+  let dateOffset = 0;
+  const yesterdayMatch = lower.match(/\byesterday\b/);
+  const daysAgoMatch = lower.match(/(\d+)\s*days?\s*ago/);
+  if (yesterdayMatch) {
+    dateOffset = 1;
+  } else if (daysAgoMatch) {
+    dateOffset = parseInt(daysAgoMatch[1], 10);
   }
 
-  return [{ json: result }];
+  // ---- Parse log_expense ----
+  let amount = 0;
+  let category = 'Misc';
+  let note = '';
+  let tags = [];
+
+  if (intent === 'log_expense') {
+    const numMatch = text.match(/\d+(?:\.\d{1,2})?/);
+    amount = numMatch ? parseFloat(numMatch[0]) : 0;
+
+    const tagMatches = text.match(/#\w+/g);
+    if (tagMatches) tags = tagMatches;
+
+    let cleaned = text
+      .replace(/\byesterday\b/gi, '')
+      .replace(/\d+\s*days?\s*ago/gi, '')
+      .replace(/\d+(?:\.\d{1,2})?/g, '')
+      .replace(/#\w+/g, '')
+      .replace(new RegExp('\\b(' + STOP_WORDS.join('|') + ')\\b', 'gi'), '')
+      .replace(/\s+/g, ' ')
+      .trim();
+
+    const { category: cat, keyword: matchedKw } = matchCategory(cleaned);
+    category = cat;
+
+    if (matchedKw) {
+      const idx = cleaned.toLowerCase().indexOf(matchedKw);
+      note = (cleaned.substring(0, idx) + cleaned.substring(idx + matchedKw.length))
+        .replace(/\s+/g, ' ')
+        .trim();
+    } else {
+      note = cleaned;
+    }
+  }
+
+  // ---- Parse log_income ----
+  let source = '';
+  if (intent === 'log_income') {
+    const numMatch = text.match(/\d+(?:\.\d{1,2})?/);
+    amount = numMatch ? parseFloat(numMatch[0]) : 0;
+    source = lower
+      .replace(/\d+/g, '')
+      .replace(/\b(received|got|earned|rs|npr)\b/g, '')
+      .trim() || 'unspecified';
+  }
+
+  // ---- Parse edit_last ----
+  let editAmount = null;
+  let editCategory = null;
+
+  if (intent === 'edit_last') {
+    const amtMatch = text.match(/(?:amount\s*(?:to\s*)?|to\s+)(\d+(?:\.\d{1,2})?)/i);
+    if (amtMatch) editAmount = parseFloat(amtMatch[1]);
+
+    const catMatch = text.match(/(?:was|to)\s+(\w+)/i);
+    if (catMatch) {
+      const possibleCat = catMatch[1].toLowerCase();
+      if (ALL_CATEGORIES.includes(possibleCat)) {
+        editCategory = possibleCat.charAt(0).toUpperCase() + possibleCat.slice(1);
+      }
+    }
+
+    if (!editAmount && !editCategory) {
+      const numMatch = text.match(/\d+(?:\.\d{1,2})?/);
+      if (numMatch) editAmount = parseFloat(numMatch[0]);
+    }
+  }
+
+  // ---- Parse set_budget ----
+  let budgetCategory = null;
+  let budgetAmount = null;
+  if (intent === 'set_budget') {
+    const budgetMatch = lower.match(/set\s+budget\s+(\w+)\s+(\d+)/);
+    if (budgetMatch) {
+      budgetCategory = matchCategory(budgetMatch[1]).category;
+      budgetAmount = parseInt(budgetMatch[2], 10);
+    }
+  }
+
+  // ---- Parse report ----
+  let period = 'this_month';
+  let categoryFilter = null;
+  if (intent === 'report') {
+    if (/today/.test(lower)) period = 'today';
+    else if (/this\s*week/.test(lower)) period = 'this_week';
+    else if (/last\s*month/.test(lower)) period = 'last_month';
+    else if (/yesterday/.test(lower)) period = 'yesterday';
+
+    const catFilter = lower.match(/(?:on|for)\s+(\w+)/);
+    if (catFilter) categoryFilter = matchCategory(catFilter[1]).category;
+  }
+
+  return {
+    intent,
+    amount,
+    category,
+    note,
+    tags,
+    dateOffset,
+    editAmount,
+    editCategory,
+    source,
+    budgetCategory,
+    budgetAmount,
+    period,
+    categoryFilter,
+    rawMessage: text,
+  };
 }
 
-// ─── Report ──────────────────────────────────────────────────
-if (/\b(report|summary|how much|total)\b/i.test(msgLower)) {
-  const result = { intent: 'report', raw_message: msg };
+// ─── n8n Code Node wrapper ──────────────────────────────────
+// Uncomment the block below when pasting into an n8n Code node:
+//
+// const msg = $input.first().json.message;
+// const result = parseMessage(msg.text);
+// const esc = (s) => (s || '').replace(/'/g, "''");
+// const tagsLiteral = result.tags.length > 0
+//   ? '{' + result.tags.map(t => '"' + t + '"').join(',') + '}'
+//   : '{}';
+//
+// return [{ json: {
+//   chatId: msg.chat.id,
+//   telegramId: msg.from.id,
+//   firstName: esc(msg.from.first_name || ''),
+//   username: esc(msg.from.username || ''),
+//   originalMessage: esc(result.rawMessage),
+//   intent: result.intent,
+//   amount: result.amount,
+//   category: result.category,
+//   note: esc(result.note),
+//   tagsLiteral,
+//   dateOffset: result.dateOffset,
+//   editAmount: result.editAmount,
+//   editCategory: result.editCategory,
+//   editQuery: '',  // build dynamically for edit intent
+// }}];
 
-  if (/today/.test(msgLower)) result.period = 'today';
-  else if (/this week/.test(msgLower)) result.period = 'this_week';
-  else if (/last month/.test(msgLower)) result.period = 'last_month';
-  else if (/yesterday/.test(msgLower)) result.period = 'yesterday';
-  else result.period = 'this_month';
+// ─── Quick test ─────────────────────────────────────────────
+if (typeof require !== 'undefined' && require.main === module) {
+  const tests = [
+    '120 food',
+    'spent 500 on petrol',
+    'chai 40',
+    'uber 250 to office',
+    '500 dinner with friends #client',
+    '15000 rent',
+    '120 food yesterday',
+    '500 petrol 2 days ago',
+    'groceries 1200 3 days ago #weekly',
+    'delete last',
+    'remove last',
+    'undo',
+    'cancel last',
+    'edit last amount to 150',
+    'last was transport not food',
+    'change last to groceries',
+    'correct last 200',
+    'report today',
+    'report this month',
+    'how much on food this month',
+    'total this week',
+    'set budget food 5000',
+    'received 50000 salary',
+    'earned 2000 freelance',
+    'help',
+    '/start',
+    'random text no number',
+  ];
 
-  const catFilter = msgLower.match(/(?:on|for)\s+(\w+)/);
-  if (catFilter) result.category_filter = matchCategory(catFilter[1]);
+  console.log('%-45s %-15s %s', 'MESSAGE', 'INTENT', 'PARSED');
+  console.log('-'.repeat(100));
 
-  return [{ json: result }];
-}
-
-// ─── Set budget ──────────────────────────────────────────────
-const budgetMatch = msgLower.match(/set\s+budget\s+(\w+)\s+(\d+)/);
-if (budgetMatch) {
-  return [{ json: {
-    intent: 'set_budget',
-    category: matchCategory(budgetMatch[1]),
-    amount: parseInt(budgetMatch[2]),
-    raw_message: msg
-  }}];
-}
-
-// ─── Income ──────────────────────────────────────────────────
-if (/\b(received|earned|salary|income)\b/i.test(msgLower)) {
-  const a = msg.match(/(\d+)/);
-  if (a) {
-    const source = msgLower.replace(/\d+/g, '').replace(/\b(received|got|earned|rs|npr)\b/g, '').trim();
-    return [{ json: {
-      intent: 'log_income',
-      amount: parseInt(a[1]),
-      source: source || 'unspecified',
-      raw_message: msg
-    }}];
+  for (const t of tests) {
+    const r = parseMessage(t);
+    let detail = '';
+    switch (r.intent) {
+      case 'log_expense':
+        detail = `amt=${r.amount} cat=${r.category} note="${r.note}" tags=${r.tags.join(',')} dateOffset=${r.dateOffset}`;
+        break;
+      case 'log_income':
+        detail = `amt=${r.amount} source="${r.source}"`;
+        break;
+      case 'edit_last':
+        detail = `editAmt=${r.editAmount} editCat=${r.editCategory}`;
+        break;
+      case 'report':
+        detail = `period=${r.period} catFilter=${r.categoryFilter}`;
+        break;
+      case 'set_budget':
+        detail = `cat=${r.budgetCategory} amt=${r.budgetAmount}`;
+        break;
+      default:
+        detail = '';
+    }
+    console.log('%-45s %-15s %s', t, r.intent, detail);
   }
 }
 
-// ─── Log expense (default) ───────────────────────────────────
-const tags = msg.match(/#\w+/g) || [];
-const tagsStr = tags.join(',');
-
-// Split by newlines to handle multi-line messages, then parse each line
-const lines = msg.split(/\\n|\n/).map(l => l.trim()).filter(l => l);
-
-const items = [];
-
-for (const line of lines) {
-  const lineLower = line.toLowerCase();
-  const amountMatch = line.match(/(\d+)/);
-  if (!amountMatch) continue;
-
-  const lineAmount = parseInt(amountMatch[1]);
-
-  // Remove number, tags, stop words → leftover is category hint
-  const hint = lineLower
-    .replace(/\d+/g, '')
-    .replace(/#\w+/g, '')
-    .split(/\s+/)
-    .filter(w => w && !STOP_WORDS.includes(w))
-    .join(' ');
-
-  const category = matchCategory(hint);
-  const note = stripCategoryKeywords(hint, category);
-  items.push({ amount: lineAmount, category, note });
-}
-
-// If no items parsed from lines, treat whole message as single expense
-if (items.length === 0) {
-  const amountMatch = msg.match(/(\d+)/);
-  if (!amountMatch) {
-    return [{ json: { intent: 'unknown', raw_message: msg } }];
-  }
-  const remaining = msgLower
-    .replace(/\d+/g, '')
-    .replace(/#\w+/g, '')
-    .split(/\s+/)
-    .filter(w => w && !STOP_WORDS.includes(w))
-    .join(' ');
-  const category = matchCategory(remaining);
-  const note = stripCategoryKeywords(remaining, category);
-  items.push({ amount: parseInt(amountMatch[1]), category, note });
-}
-
-const total = items.reduce((sum, item) => sum + item.amount, 0);
-
-return [{ json: {
-  intent: 'log_expense',
-  amount: items.length === 1 ? items[0].amount : total,
-  category: items.length === 1 ? items[0].category : 'Multiple',
-  note: items.length === 1 ? items[0].note : '',
-  tags: tagsStr,
-  total,
-  items,
-  raw_message: msg
-}}];
+module.exports = { parseMessage, matchCategory, CATEGORY_KEYWORDS };
