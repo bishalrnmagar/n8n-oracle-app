@@ -21,6 +21,8 @@ const CATEGORY_KEYWORDS = {
 
 const STOP_WORDS = ['spent', 'on', 'for', 'rs', 'npr', 'rupees', 'rp', 'paid'];
 
+const TXN_ID_PATTERN = /\bTXN-\d{8}-\d{3}\b/;
+
 const ALL_CATEGORIES = ['food', 'transport', 'groceries', 'rent', 'utilities', 'entertainment', 'health', 'shopping', 'subscriptions', 'education', 'misc'];
 
 function matchCategory(text) {
