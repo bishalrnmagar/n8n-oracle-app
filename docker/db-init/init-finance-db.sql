@@ -44,7 +44,7 @@ CREATE INDEX idx_categories_user ON categories(user_id);
 -- ============================================================
 
 CREATE TABLE transactions (
-    id TEXT PRIMARY KEY,
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
     date DATE NOT NULL,
     time TIME NOT NULL,
