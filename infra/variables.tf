@@ -63,6 +63,12 @@ variable "n8n_basic_auth_password" {
   sensitive   = true
 }
 
+variable "n8n_db_password" {
+  description = "PostgreSQL password for n8n database"
+  type        = string
+  sensitive   = true
+}
+
 variable "availability_domain_index" {
   description = "Index of the availability domain to use (0, 1, or 2). Try different values if you get 'Out of host capacity'"
   type        = number

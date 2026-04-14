@@ -58,6 +58,7 @@ resource "oci_core_instance" "finance_vm" {
       duckdns_token           = var.duckdns_token
       n8n_basic_auth_user     = var.n8n_basic_auth_user
       n8n_basic_auth_password = var.n8n_basic_auth_password
+      n8n_db_password         = var.n8n_db_password
     }))
   }
 

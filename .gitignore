@@ -1,3 +1,19 @@
+# Terraform secrets & state
+*.tfstate
+*.tfstate.*
 terraform.tfvars
-terraform.tfstate.backup
+.terraform/
+.terraform.lock.hcl
+crash.log
+override.tf
+override.tf.json
+*_override.tf
+*_override.tf.json
+
+# Environment files
+.env
+*.pem
+*.key
+
+# n8n
 CLAUDE.md

@@ -3,39 +3,159 @@
   "nodes": [
     {
       "parameters": {
-        "updates": [
-          "message"
-        ],
+        "updates": ["message"],
         "additionalFields": {}
       },
       "type": "n8n-nodes-base.telegramTrigger",
       "typeVersion": 1.2,
-      "position": [
-        0,
-        0
-      ],
+      "position": [0, 400],
       "id": "58489504-fd67-4e17-aa91-207c58653401",
       "name": "Telegram Trigger",
       "webhookId": "35cd290e-7a77-4dd1-8112-104a04334e32",
       "credentials": {
         "telegramApi": {
-          "id": "XrG30rzkLtAuqJQd",
+          "id": "YOUR_TELEGRAM_CREDENTIAL_ID",
           "name": "Telegram account"
         }
       }
     },
     {
       "parameters": {
-        "jsCode": "const msg = $input.first().json.message.text || '';\nconst chatId = $input.first().json.message.chat.id;\nconst firstName = $input.first().json.message.from.first_name || '';\nconst raw = msg.trim();\n\n// Extract all numbers from the message\nconst numbers = raw.match(/\\d+(?:\\.\\d{1,2})?/g);\n\nif (!numbers || numbers.length === 0) {\n  return [{\n    json: {\n      chatId,\n      reply: '❌ No amounts found in your message.\\n\\nSend something like:\\n• 120 food\\n• spent 500 on petrol\\n• 40 chai'\n    }\n  }];\n}\n\nconst amounts = numbers.map(n => parseFloat(n));\nconst total = amounts.reduce((sum, a) => sum + a, 0);\n\n// Extract tags\nconst tags = [];\nconst tagRegex = /#(\\w+)/g;\nlet tagMatch;\nwhile ((tagMatch = tagRegex.exec(raw)) !== null) {\n  tags.push('#' + tagMatch[1]);\n}\n\n// Remove numbers and tags to get the text part\nconst textPart = raw\n  .replace(/\\d+(?:\\.\\d{1,2})?/g, '')\n  .replace(/#\\w+/g, '')\n  .replace(/\\b(spent|on|for|rs|npr|rupees|rp|paid)\\b/gi, '')\n  .replace(/\\s+/g, ' ')\n  .trim();\n\n// Category keyword mapping\nconst categories = {\n  'Food': ['food', 'lunch', 'dinner', 'breakfast', 'snack', 'meal', 'restaurant', 'cafe', 'chai', 'tea', 'coffee', 'momo', 'dal bhat', 'tiffin', 'canteen', 'dal', 'bhat'],\n  'Transport': ['petrol', 'diesel', 'fuel', 'uber', 'taxi', 'bus', 'bike', 'ride', 'fare', 'auto', 'grab', 'ola', 'pathao'],\n  'Groceries': ['groceries', 'grocery', 'vegetables', 'fruits', 'supermarket', 'bhatbhateni', 'bigmart', 'dairy', 'milk', 'eggs'],\n  'Rent': ['rent', 'house rent', 'room rent', 'flat'],\n  'Utilities': ['electricity', 'water', 'internet', 'wifi', 'phone', 'mobile', 'recharge', 'bill', 'nea', 'ntc', 'ncell'],\n  'Entertainment': ['movie', 'netflix', 'spotify', 'game', 'party', 'outing', 'drinks', 'beer'],\n  'Health': ['medicine', 'doctor', 'hospital', 'pharmacy', 'gym', 'medical', 'health', 'dental'],\n  'Shopping': ['clothes', 'shoes', 'electronics', 'amazon', 'daraz', 'gadget', 'laptop'],\n  'Subscriptions': ['subscription', 'premium', 'membership', 'annual', 'monthly plan'],\n  'Education': ['books', 'course', 'tuition', 'class', 'training', 'udemy', 'coursera']\n};\n\nlet matchedCategory = 'Misc';\nlet matchedKeyword = '';\nconst lowerText = textPart.toLowerCase();\n\nfor (const [cat, keywords] of Object.entries(categories)) {\n  for (const kw of keywords) {\n    if (lowerText.includes(kw) && kw.length > matchedKeyword.length) {\n      matchedCategory = cat;\n      matchedKeyword = kw;\n    }\n  }\n}\n\n// Build note (remaining text after removing matched keyword)\nlet note = textPart;\nif (matchedKeyword) {\n  const kwIndex = lowerText.indexOf(matchedKeyword);\n  note = (textPart.substring(0, kwIndex) + textPart.substring(kwIndex + matchedKeyword.length)).replace(/\\s+/g, ' ').trim();\n}\n\n// Build reply\nlet reply = '📋 Message Breakdown\\n';\nreply += '━━━━━━━━━━━━━━━\\n';\nreply += '📨 Original: ' + raw + '\\n\\n';\nreply += '💰 Amount(s): ' + amounts.map(a => 'NPR ' + a.toLocaleString()).join(', ') + '\\n';\nreply += '📁 Category: ' + matchedCategory + '\\n';\nif (note) reply += '📝 Note: ' + note + '\\n';\nif (tags.length > 0) reply += '🏷️ Tags: ' + tags.join(', ') + '\\n';\nreply += '👤 From: ' + firstName + '\\n';\nreply += '━━━━━━━━━━━━━━━\\n';\nreply += '💵 Total: NPR ' + total.toLocaleString();\n\nreturn [{ json: { chatId, reply } }];"
+        "jsCode": "const msg = $input.first().json.message;\nconst text = (msg.text || '').trim();\nconst chatId = msg.chat.id;\nconst telegramId = msg.from.id;\nconst firstName = msg.from.first_name || '';\nconst username = msg.from.username || '';\n\n// Helper: escape single quotes for SQL\nconst esc = (s) => (s || '').replace(/'/g, \"''\");\n\n// ---- Classify intent ----\nlet intent = 'unknown';\nconst lower = text.toLowerCase();\n\nif (/^\\/?(?:start|help)$/i.test(text)) {\n  intent = 'help';\n} else if (/\\b(delete\\s*last|remove\\s*last|undo|cancel\\s*last)\\b/i.test(text)) {\n  intent = 'delete_last';\n} else if (/\\b(edit\\s*last|change\\s*last|correct\\s*last|last\\s*was)\\b/i.test(text)) {\n  intent = 'edit_last';\n} else if (/\\d/.test(text)) {\n  intent = 'log_expense';\n}\n\n// ---- Parse for log_expense ----\nlet amount = 0;\nlet category = 'Misc';\nlet note = '';\nlet tags = [];\nlet tagsLiteral = '{}';\nlet dateOffset = 0;\n\n// ---- Detect date references ----\nconst yesterdayMatch = lower.match(/\\byesterday\\b/);\nconst daysAgoMatch = lower.match(/(\\d+)\\s*days?\\s*ago/);\nif (yesterdayMatch) {\n  dateOffset = 1;\n} else if (daysAgoMatch) {\n  dateOffset = parseInt(daysAgoMatch[1], 10);\n}\n\nif (intent === 'log_expense') {\n  const numMatch = text.match(/\\d+(?:\\.\\d{1,2})?/);\n  amount = numMatch ? parseFloat(numMatch[0]) : 0;\n\n  const tagMatches = text.match(/#\\w+/g);\n  if (tagMatches) {\n    tags = tagMatches;\n    tagsLiteral = '{' + tagMatches.map(t => '\"' + t + '\"').join(',') + '}';\n  }\n\n  let cleaned = text\n    .replace(/\\d+(?:\\.\\d{1,2})?/g, '')\n    .replace(/#\\w+/g, '')\n    .replace(/\\byesterday\\b/gi, '')\n    .replace(/\\d+\\s*days?\\s*ago/gi, '')\n    .replace(/\\b(spent|on|for|rs|npr|rupees|rp|paid)\\b/gi, '')\n    .replace(/\\s+/g, ' ')\n    .trim();\n\n  const catMap = {\n    'Food': ['food','lunch','dinner','breakfast','snack','meal','restaurant','cafe','chai','tea','coffee','momo','dal bhat','tiffin','canteen'],\n    'Transport': ['petrol','diesel','fuel','uber','taxi','bus','bike','ride','fare','auto','grab','ola','pathao'],\n    'Groceries': ['groceries','grocery','vegetables','fruits','supermarket','bhatbhateni','bigmart','dairy','milk','eggs'],\n    'Rent': ['rent','house rent','room rent','flat'],\n    'Utilities': ['electricity','water','internet','wifi','phone','mobile','recharge','bill','nea','ntc','ncell'],\n    'Entertainment': ['movie','netflix','spotify','game','party','outing','drinks','beer'],\n    'Health': ['medicine','doctor','hospital','pharmacy','gym','medical','health','dental'],\n    'Shopping': ['clothes','shoes','electronics','amazon','daraz','gadget','laptop'],\n    'Subscriptions': ['subscription','premium','membership','annual','monthly plan'],\n    'Education': ['books','course','tuition','class','training','udemy','coursera']\n  };\n\n  let matchedKw = '';\n  const lowerCleaned = cleaned.toLowerCase();\n  for (const [cat, kws] of Object.entries(catMap)) {\n    for (const kw of kws) {\n      if (lowerCleaned.includes(kw) && kw.length > matchedKw.length) {\n        category = cat;\n        matchedKw = kw;\n      }\n    }\n  }\n\n  if (matchedKw) {\n    const idx = lowerCleaned.indexOf(matchedKw);\n    note = (cleaned.substring(0, idx) + cleaned.substring(idx + matchedKw.length)).replace(/\\s+/g, ' ').trim();\n  } else {\n    note = cleaned;\n  }\n}\n\n// ---- Parse for edit_last ----\nlet editAmount = null;\nlet editCategory = null;\nlet editQuery = '';\n\nif (intent === 'edit_last') {\n  const amtMatch = text.match(/(?:amount\\s*(?:to\\s*)?|to\\s+)(\\d+(?:\\.\\d{1,2})?)/i);\n  if (amtMatch) editAmount = parseFloat(amtMatch[1]);\n\n  const catMatch = text.match(/(?:was|to)\\s+(\\w+)/i);\n  if (catMatch) {\n    const possibleCat = catMatch[1].toLowerCase();\n    const allCats = ['food','transport','groceries','rent','utilities','entertainment','health','shopping','subscriptions','education','misc'];\n    if (allCats.includes(possibleCat)) {\n      editCategory = possibleCat.charAt(0).toUpperCase() + possibleCat.slice(1);\n    }\n  }\n\n  if (!editAmount && !editCategory) {\n    const numMatch = text.match(/\\d+(?:\\.\\d{1,2})?/);\n    if (numMatch) editAmount = parseFloat(numMatch[0]);\n  }\n\n  if (editAmount === null && editCategory === null) {\n    editQuery = \"SELECT 'no_edit' AS result;\";\n  } else {\n    const setClauses = [];\n    if (editAmount !== null) setClauses.push('amount = ' + editAmount);\n    if (editCategory !== null) setClauses.push(\"category = '\" + esc(editCategory) + \"'\");\n    setClauses.push('updated_at = NOW()');\n\n    editQuery = \"WITH usr AS (\" +\n      \" INSERT INTO users (telegram_id, display_name, telegram_username)\" +\n      \" VALUES (\" + telegramId + \", '\" + esc(firstName) + \"', '\" + esc(username) + \"')\" +\n      \" ON CONFLICT (telegram_id) DO UPDATE SET display_name = EXCLUDED.display_name\" +\n      \" RETURNING id\" +\n      \"), old_vals AS (\" +\n      \" SELECT id, amount AS old_amount, category AS old_category\" +\n      \" FROM transactions\" +\n      \" WHERE user_id = (SELECT id FROM usr) AND status = 'active'\" +\n      \" ORDER BY created_at DESC LIMIT 1\" +\n      \"), updated AS (\" +\n      \" UPDATE transactions SET \" + setClauses.join(', ') +\n      \" WHERE id = (SELECT id FROM old_vals)\" +\n      \" RETURNING transactions.id, transactions.amount, transactions.category, transactions.date\" +\n      \") SELECT\" +\n      \" COALESCE(u.id, 'NONE') AS id,\" +\n      \" COALESCE(u.amount, 0) AS amount,\" +\n      \" COALESCE(u.category, '') AS category,\" +\n      \" u.date,\" +\n      \" COALESCE(o.old_amount, 0) AS old_amount,\" +\n      \" COALESCE(o.old_category, '') AS old_category,\" +\n      \" CASE WHEN u.id IS NOT NULL THEN 'updated' ELSE 'not_found' END AS result\" +\n      \" FROM (SELECT 1) AS dummy\" +\n      \" LEFT JOIN updated u ON true\" +\n      \" LEFT JOIN old_vals o ON true;\";\n  }\n}\n\nreturn [{\n  json: {\n    chatId,\n    telegramId,\n    firstName: esc(firstName),\n    username: esc(username),\n    originalMessage: esc(text),\n    intent,\n    amount,\n    category,\n    note: esc(note),\n    tagsLiteral,\n    dateOffset,\n    editAmount,\n    editCategory,\n    editQuery\n  }\n}];"
       },
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
-      "position": [
-        220,
-        0
-      ],
+      "position": [260, 400],
       "id": "a1b2c3d4-0001-4000-8000-000000000001",
       "name": "Parse Message"
+    },
+    {
+      "parameters": {
+        "rules": {
+          "values": [
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": ""
+                },
+                "conditions": [
+                  {
+                    "id": "cond-log",
+                    "leftValue": "={{ $json.intent }}",
+                    "rightValue": "log_expense",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    }
+                  }
+                ]
+              },
+              "renameOutput": true,
+              "outputKey": "Log Expense"
+            },
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": ""
+                },
+                "conditions": [
+                  {
+                    "id": "cond-delete",
+                    "leftValue": "={{ $json.intent }}",
+                    "rightValue": "delete_last",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    }
+                  }
+                ]
+              },
+              "renameOutput": true,
+              "outputKey": "Delete Last"
+            },
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": ""
+                },
+                "conditions": [
+                  {
+                    "id": "cond-edit",
+                    "leftValue": "={{ $json.intent }}",
+                    "rightValue": "edit_last",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    }
+                  }
+                ]
+              },
+              "renameOutput": true,
+              "outputKey": "Edit Last"
+            },
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": ""
+                },
+                "conditions": [
+                  {
+                    "id": "cond-help",
+                    "leftValue": "={{ $json.intent }}",
+                    "rightValue": "help",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    }
+                  }
+                ]
+              },
+              "renameOutput": true,
+              "outputKey": "Help"
+            }
+          ]
+        },
+        "options": {
+          "fallbackOutput": "extra"
+        }
+      },
+      "type": "n8n-nodes-base.switch",
+      "typeVersion": 3.2,
+      "position": [520, 400],
+      "id": "a1b2c3d4-0003-4000-8000-000000000003",
+      "name": "Route Intent"
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "WITH usr AS (\n  INSERT INTO users (telegram_id, display_name, telegram_username)\n  VALUES ({{ $json.telegramId }}, '{{ $json.firstName }}', '{{ $json.username }}')\n  ON CONFLICT (telegram_id) DO UPDATE SET\n    display_name = EXCLUDED.display_name,\n    telegram_username = EXCLUDED.telegram_username\n  RETURNING id\n),\ntarget_date AS (\n  SELECT ((NOW() AT TIME ZONE 'Asia/Kathmandu') - INTERVAL '{{ $json.dateOffset }} days')::DATE AS d\n),\ntxn_count AS (\n  SELECT COALESCE(COUNT(*), 0) + 1 AS cnt\n  FROM transactions\n  WHERE user_id = (SELECT id FROM usr)\n    AND date = (SELECT d FROM target_date)\n)\nINSERT INTO transactions (id, user_id, date, time, amount, category, note, tags, original_message, status)\nSELECT\n  'TXN-' || TO_CHAR((SELECT d FROM target_date), 'YYYYMMDD') || '-' || LPAD(txn_count.cnt::TEXT, 3, '0'),\n  usr.id,\n  (SELECT d FROM target_date),\n  (NOW() AT TIME ZONE 'Asia/Kathmandu')::TIME,\n  {{ $json.amount }},\n  '{{ $json.category }}',\n  '{{ $json.note }}',\n  '{{ $json.tagsLiteral }}'::TEXT[],\n  '{{ $json.originalMessage }}',\n  'active'\nFROM usr, txn_count\nRETURNING id, amount, category, note, date, time;",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [800, 0],
+      "id": "a1b2c3d4-0004-4000-8000-000000000004",
+      "name": "Log Transaction",
+      "credentials": {
+        "postgres": {
+          "id": "YOUR_POSTGRES_CREDENTIAL_ID",
+          "name": "Finance DB"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "const txn = $input.first().json;\nconst chatId = $('Parse Message').first().json.chatId;\nconst dateObj = new Date(txn.date);\nconst dateStr = dateObj.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });\nconst timeStr = txn.time ? txn.time.substring(0, 5) : '';\n\nlet reply = '✅ Logged: NPR ' + Number(txn.amount).toLocaleString() + ' → ' + txn.category + '\\n';\nreply += '📅 ' + dateStr + ' | ' + timeStr + '\\n';\nreply += '🆔 ' + txn.id;\nif (txn.note) reply += '\\n📝 ' + txn.note;\n\nreturn [{ json: { chatId, reply } }];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1080, 0],
+      "id": "a1b2c3d4-0005-4000-8000-000000000005",
+      "name": "Format Log Reply"
     },
     {
       "parameters": {
@@ -45,15 +165,140 @@
       },
       "type": "n8n-nodes-base.telegram",
       "typeVersion": 1.2,
-      "position": [
-        440,
-        0
-      ],
-      "id": "a1b2c3d4-0002-4000-8000-000000000002",
-      "name": "Send Reply",
+      "position": [1360, 0],
+      "id": "a1b2c3d4-0006-4000-8000-000000000006",
+      "name": "Send Log Reply",
       "credentials": {
         "telegramApi": {
-          "id": "XrG30rzkLtAuqJQd",
+          "id": "YOUR_TELEGRAM_CREDENTIAL_ID",
+          "name": "Telegram account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "WITH usr AS (\n  INSERT INTO users (telegram_id, display_name, telegram_username)\n  VALUES ({{ $json.telegramId }}, '{{ $json.firstName }}', '{{ $json.username }}')\n  ON CONFLICT (telegram_id) DO UPDATE SET display_name = EXCLUDED.display_name\n  RETURNING id\n),\ntarget AS (\n  SELECT id FROM transactions\n  WHERE user_id = (SELECT id FROM usr) AND status = 'active'\n  ORDER BY created_at DESC LIMIT 1\n),\ndeleted AS (\n  UPDATE transactions SET status = 'deleted', updated_at = NOW()\n  WHERE id = (SELECT id FROM target)\n  RETURNING id, amount, category, date\n)\nSELECT\n  COALESCE(d.id, 'NONE') AS id,\n  COALESCE(d.amount, 0) AS amount,\n  COALESCE(d.category, '') AS category,\n  d.date,\n  CASE WHEN d.id IS NOT NULL THEN 'deleted' ELSE 'not_found' END AS result\nFROM (SELECT 1) AS dummy\nLEFT JOIN deleted d ON true;",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [800, 240],
+      "id": "a1b2c3d4-0007-4000-8000-000000000007",
+      "name": "Soft Delete Last",
+      "credentials": {
+        "postgres": {
+          "id": "YOUR_POSTGRES_CREDENTIAL_ID",
+          "name": "Finance DB"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "const row = $input.first().json;\nconst chatId = $('Parse Message').first().json.chatId;\nlet reply;\n\nif (row.result === 'not_found') {\n  reply = '❌ No active transaction found to delete.';\n} else {\n  const dateStr = row.date ? new Date(row.date).toLocaleDateString('en-US', { month: 'short', day: 'numeric' }) : '';\n  reply = '🗑 Deleted: NPR ' + Number(row.amount).toLocaleString() + ' → ' + row.category + ' (' + dateStr + ')\\n🆔 ' + row.id;\n}\n\nreturn [{ json: { chatId, reply } }];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1080, 240],
+      "id": "a1b2c3d4-0008-4000-8000-000000000008",
+      "name": "Format Delete Reply"
+    },
+    {
+      "parameters": {
+        "chatId": "={{ $json.chatId }}",
+        "text": "={{ $json.reply }}",
+        "additionalFields": {}
+      },
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1.2,
+      "position": [1360, 240],
+      "id": "a1b2c3d4-0009-4000-8000-000000000009",
+      "name": "Send Delete Reply",
+      "credentials": {
+        "telegramApi": {
+          "id": "YOUR_TELEGRAM_CREDENTIAL_ID",
+          "name": "Telegram account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "={{ $json.editQuery }}",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [800, 480],
+      "id": "a1b2c3d4-0010-4000-8000-000000000010",
+      "name": "Edit Transaction",
+      "credentials": {
+        "postgres": {
+          "id": "YOUR_POSTGRES_CREDENTIAL_ID",
+          "name": "Finance DB"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "const row = $input.first().json;\nconst chatId = $('Parse Message').first().json.chatId;\nlet reply;\n\nif (row.result === 'no_edit') {\n  reply = '❌ Could not understand what to edit.\\n\\nTry:\\n• edit last amount to 150\\n• last was transport not food';\n} else if (row.result === 'not_found' || !row.id || row.id === 'NONE') {\n  reply = '❌ No active transaction found to edit.';\n} else {\n  const changes = [];\n  if (Number(row.old_amount) !== Number(row.amount)) {\n    changes.push('Amount: NPR ' + Number(row.old_amount).toLocaleString() + ' → NPR ' + Number(row.amount).toLocaleString());\n  }\n  if (row.old_category !== row.category) {\n    changes.push('Category: ' + row.old_category + ' → ' + row.category);\n  }\n  reply = '✏️ Updated: ' + row.id + '\\n' + changes.join('\\n');\n}\n\nreturn [{ json: { chatId, reply } }];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1080, 480],
+      "id": "a1b2c3d4-0011-4000-8000-000000000011",
+      "name": "Format Edit Reply"
+    },
+    {
+      "parameters": {
+        "chatId": "={{ $json.chatId }}",
+        "text": "={{ $json.reply }}",
+        "additionalFields": {}
+      },
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1.2,
+      "position": [1360, 480],
+      "id": "a1b2c3d4-0012-4000-8000-000000000012",
+      "name": "Send Edit Reply",
+      "credentials": {
+        "telegramApi": {
+          "id": "YOUR_TELEGRAM_CREDENTIAL_ID",
+          "name": "Telegram account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "chatId": "={{ $json.chatId }}",
+        "text": "👋 Welcome to Finance Tracker!\n\nJust message me your expenses naturally:\n  \"120 food\"\n  \"spent 500 on petrol\"\n  \"chai 40\"\n\nPast dates:\n  \"120 food yesterday\"\n  \"500 petrol 2 days ago\"\n\nCommands:\n  delete last — Remove last entry\n  edit last amount to 150 — Fix last entry\n  last was transport not food — Fix category\n  help — Show this message\n\nStart tracking! 💰",
+        "additionalFields": {}
+      },
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1.2,
+      "position": [800, 680],
+      "id": "a1b2c3d4-0013-4000-8000-000000000013",
+      "name": "Send Help",
+      "credentials": {
+        "telegramApi": {
+          "id": "YOUR_TELEGRAM_CREDENTIAL_ID",
+          "name": "Telegram account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "chatId": "={{ $json.chatId }}",
+        "text": "❓ I didn't understand that.\n\nSend a message like:\n  \"120 food\"\n  \"spent 500 on petrol\"\n  \"delete last\"\n  \"edit last amount to 200\"\n  \"help\"",
+        "additionalFields": {}
+      },
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1.2,
+      "position": [800, 880],
+      "id": "a1b2c3d4-0014-4000-8000-000000000014",
+      "name": "Send Fallback",
+      "credentials": {
+        "telegramApi": {
+          "id": "YOUR_TELEGRAM_CREDENTIAL_ID",
           "name": "Telegram account"
         }
       }
@@ -76,7 +321,112 @@
       "main": [
         [
           {
-            "node": "Send Reply",
+            "node": "Route Intent",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Route Intent": {
+      "main": [
+        [
+          {
+            "node": "Log Transaction",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Soft Delete Last",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Edit Transaction",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Send Help",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Send Fallback",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Log Transaction": {
+      "main": [
+        [
+          {
+            "node": "Format Log Reply",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Format Log Reply": {
+      "main": [
+        [
+          {
+            "node": "Send Log Reply",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Soft Delete Last": {
+      "main": [
+        [
+          {
+            "node": "Format Delete Reply",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Format Delete Reply": {
+      "main": [
+        [
+          {
+            "node": "Send Delete Reply",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Edit Transaction": {
+      "main": [
+        [
+          {
+            "node": "Format Edit Reply",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Format Edit Reply": {
+      "main": [
+        [
+          {
+            "node": "Send Edit Reply",
             "type": "main",
             "index": 0
           }

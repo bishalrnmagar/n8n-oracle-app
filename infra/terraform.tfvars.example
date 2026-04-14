@@ -19,3 +19,6 @@ telegram_bot_token = "123456789:ABCdefGHIjklMNOpqrsTUVwxyz"
 # n8n Auth
 n8n_basic_auth_user     = "admin"
 n8n_basic_auth_password = "change-me-to-a-strong-password"
+
+# n8n Database
+n8n_db_password = "change-me-to-a-strong-db-password"
